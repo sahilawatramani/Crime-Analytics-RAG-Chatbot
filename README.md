@@ -59,10 +59,7 @@ The system supports both free-form natural language queries and structured filte
 - Preprocessed and normalized for consistency and accuracy
 
 **NLP/RAG:**
-- [If applicable: spaCy, NLTK, or custom rule-based query analyzer for intent and parameter extraction]
-- Retrieval-Augmented Generation for context-aware responses (if using LLMs or embeddings)
-
-
+- spaCy, transformers, torch, Hugging Face pipeline, AutoModel, AutoTokenizer, DistilBERT
 ---
 
 ## 📊 Data Sources
