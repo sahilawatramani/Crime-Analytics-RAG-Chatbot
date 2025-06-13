@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crime Analytics RAG Chatbot</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<body>
+    <div class="main-wrapper">
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h2>📊 Analytics Hub</h2>
+            </div>
+            <div class="sidebar-section">
+                <h3>⚡ Quick Stats</h3>
+                <div id="quick-stats" class="stats-grid">
+                    <!-- Quick stats will be loaded here by JavaScript -->
+                </div>
+            </div>
+            <div class="sidebar-section">
+                <h3>🔍 Filters</h3>
+                <div id="filters">
+                    <!-- Filters will be loaded here by JavaScript -->
+                </div>
+            </div>
+            <div class="sidebar-section">
+                <h3>💬 Sample Queries</h3>
+                <div id="sample-queries">
+                    <!-- Sample queries will be loaded here by JavaScript -->
+                </div>
+            </div>
+        </aside>
+
+        <div class="main-content">
+            <header>
+                <h1>🚨 Crime Analytics RAG Chatbot: India (2001-2014)</h1>
+                <p>AI-Powered Analysis of Crimes Against Women in India</p>
+            </header>
+
+            <div class="chat-container">
+                <div id="messages" class="messages">
+                    <!-- Chat messages will be appended here -->
+                </div>
+                <form id="chat-form" class="chat-input-form">
+                    <input type="text" id="user-input" placeholder="e.g., 'Show me rape cases in Delhi from 2010 to 2012'" required>
+                    <button type="submit">Send 🚀</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+</body>
+</html> 

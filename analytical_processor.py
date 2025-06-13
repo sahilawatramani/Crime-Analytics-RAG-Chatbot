@@ -1,12 +1,19 @@
+import logging
 import pandas as pd
 import numpy as np
 from typing import Dict, Any, List, Tuple
 import re
 from datetime import datetime
+from query_analyzer import QueryAnalyzer
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 class AnalyticalProcessor:
     def __init__(self, df: pd.DataFrame):
+        """Initialize the analytical processor with a DataFrame."""
         self.df = df
+        logger.info("AnalyticalProcessor initialized with DataFrame")
         self.crime_mappings = {
             'rape': 'Rape',
             'dowry deaths': 'Dowry Deaths',
@@ -87,95 +94,108 @@ class AnalyticalProcessor:
             'dadra and nagar haveli': 'D & N HAVELI'
         }
     
+    def _convert_numpy_types(self, obj):
+        """Recursively convert numpy types to standard Python types."""
+        if isinstance(obj, (np.integer, np.int64)):
+            return int(obj)
+        elif isinstance(obj, (np.floating, np.float64)):
+            return float(obj)
+        elif isinstance(obj, dict):
+            return {k: self._convert_numpy_types(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._convert_numpy_types(elem) for elem in obj]
+        elif isinstance(obj, tuple):
+            return tuple(self._convert_numpy_types(elem) for elem in obj)
+        elif isinstance(obj, np.ndarray):
+            return self._convert_numpy_types(obj.tolist())
+        else:
+            return obj
+
     def process_analytical_query(self, query: str) -> Dict[str, Any]:
         """Process analytical queries with comprehensive parameter extraction and analysis"""
         try:
             print(f"DEBUG: Processing query: {query}")
-            
-            # Extract parameters from query
-            params = self._extract_parameters(query)
-            print(f"DEBUG: AnalyticalProcessor.process_analytical_query - Extracted params: {params}")
-            
-            # Always include the original query for downstream formatting logic
+
+            # Use QueryAnalyzer to extract parameters
+            analyzer = QueryAnalyzer()
+            analysis = analyzer.analyze_query(query)
+
+            # Extract the parameter dictionary
+            params = analysis.get('extracted_params', {})
+
+            # Ensure 'params' is a dictionary
+            if not isinstance(params, dict):
+                raise TypeError(f"Expected 'params' to be a dict, but got: {type(params)}")
+
+            # Add additional info to params
+            params['analysis_type'] = analysis.get('analysis_type')
             params['extracted_params'] = {'query': query}
-            
-            # Determine analysis type based on query content
-            analysis_type = self._determine_analysis_type(query, params)
-            print(f"DEBUG: AnalyticalProcessor.process_analytical_query - Determined analysis_type: {analysis_type}")
-        
-            # Filter data based on parameters
+
+            print(f"DEBUG: Extracted params: {params}")
+
+            # Determine the analysis type
+            analysis_type = params.get('analysis_type', 'general')
+            print(f"DEBUG: Determined analysis_type: {analysis_type}")
+
+            # Filter the data
             filtered_df = self._filter_data(params)
-            print(f"DEBUG: AnalyticalProcessor.process_analytical_query - Filtered data shape: {filtered_df.shape}")
+            print(f"DEBUG: Filtered data shape: {filtered_df.shape}")
             print(f"DEBUG: Unique states in filtered_df: {filtered_df['STATE/UT'].unique().tolist() if 'STATE/UT' in filtered_df.columns else 'N/A'}")
-            
+
             if filtered_df.empty:
-                print(f"DEBUG: AnalyticalProcessor.process_analytical_query - Filtered DF is empty.")
+                print("DEBUG: Filtered DataFrame is empty.")
                 return {
                     'query_type': 'error',
                     'error_message': 'No data found for the specified criteria.',
                     'suggestions': self._generate_suggestions(params)
                 }
-        
-            # Perform analysis based on type
-            print(f"DEBUG: AnalyticalProcessor.process_analytical_query - Performing analysis for type: {analysis_type}")
+
+            # Perform the relevant analysis
             if analysis_type == 'comparison':
                 result = self._perform_comparison_analysis(filtered_df, params, {
                     'analysis_type': analysis_type,
                     'comparison_type': params.get('comparison_type', 'general'),
                     'extracted_params': {'query': query}
                 })
-                print(f"DEBUG: AnalyticalProcessor.process_analytical_query - Comparison analysis result: {result.get('results', 'No results key in comparison result').keys() if isinstance(result.get('results'), dict) else result.get('results')}")
             elif analysis_type == 'ranking':
                 result = self._perform_ranking_analysis(filtered_df, params, {
                     'analysis_type': analysis_type,
                     'ranking_limit': params.get('ranking_limit', 5),
                     'extracted_params': {'query': query}
                 })
-                print(f"DEBUG: AnalyticalProcessor.process_analytical_query - Ranking analysis result: {result.get('results', 'No results key in ranking result').keys() if isinstance(result.get('results'), dict) else result.get('results')}")
             elif analysis_type == 'trend':
                 result = self._perform_trend_analysis(filtered_df, params, {
                     'analysis_type': analysis_type,
                     'extracted_params': {'query': query}
                 })
-                print(f"DEBUG: AnalyticalProcessor.process_analytical_query - Trend analysis result: {result.get('results', 'No results key in trend result').keys() if isinstance(result.get('results'), dict) else result.get('results')}")
             elif analysis_type == 'statistical':
-                result = self._perform_statistical_analysis(filtered_df, params, {
-                    'analysis_type': analysis_type,
-                    'aggregation_type': params.get('aggregation_type', 'total'),
-                    'extracted_params': {'query': query}
-                })
-                print(f"DEBUG: AnalyticalProcessor.process_analytical_query - Statistical analysis result: {result.get('results', 'No results key in statistical result').keys() if isinstance(result.get('results'), dict) else result.get('results')}")
+                result = self._perform_statistical_analysis(filtered_df, params, {})
             elif analysis_type == 'breakdown':
                 result = self._perform_breakdown_analysis(filtered_df, params, {
                     'analysis_type': analysis_type,
                     'extracted_params': {'query': query}
                 })
-                print(f"DEBUG: AnalyticalProcessor.process_analytical_query - Breakdown analysis result: {result.get('results', 'No results key in breakdown result').keys() if isinstance(result.get('results'), dict) else result.get('results')}")
             else:
-                # Default to comprehensive analysis for specific queries
                 result = self._perform_comprehensive_analysis(filtered_df, params)
-                print(f"DEBUG: AnalyticalProcessor.process_analytical_query - Comprehensive analysis result: {result.get('results', 'No results key in comprehensive result').keys() if isinstance(result.get('results'), dict) else result.get('results')}")
-            
-            # Add query parameters to result for formatting decisions
+
+            # Add metadata to the result
             result['query_params'] = params
-            print(f"DEBUG: AnalyticalProcessor.process_analytical_query - After adding query_params: {result.get('query_params', 'No query_params key')}")
             result['data_quality'] = self._assess_data_quality(filtered_df, params)
-            print(f"DEBUG: AnalyticalProcessor.process_analytical_query - After adding data_quality: {result.get('data_quality', 'No data_quality key')}")
             result['insights'] = self._generate_insights(filtered_df, params, result)
-            print(f"DEBUG: AnalyticalProcessor.process_analytical_query - After adding insights: {result.get('insights', 'No insights key')}")
-            
-            print(f"DEBUG: AnalyticalProcessor.process_analytical_query - Final result before return: {result.get('results', 'No results key').keys() if isinstance(result.get('results'), dict) else result.get('results')}")
-            
+
+            # Convert any numpy types to Python native types
+            result = self._convert_numpy_types(result)
+
             return result
-            
+
         except Exception as e:
             print(f"DEBUG: Error in process_analytical_query: {str(e)}")
             return {
                 'query_type': 'error',
                 'error_message': str(e),
-                'suggestions': self._generate_suggestions(params)
+                'suggestions': self._generate_suggestions(params if 'params' in locals() else {})
             }
-    
+
     def _filter_data(self, params: Dict[str, Any]) -> pd.DataFrame:
         """Filter data based on parameters with comprehensive mapping"""
         filtered_df = self.df.copy()
@@ -254,18 +274,10 @@ class AnalyticalProcessor:
                 })
             elif len(params.get('crimes', [])) > 1:
                 # Multiple crimes - statistical analysis
-                return self._perform_statistical_analysis(df, params, {
-                    'analysis_type': 'statistical',
-                    'aggregation_type': 'total',
-                    'extracted_params': {'query': 'statistical'}
-                })
+                return self._perform_statistical_analysis(df, params, {})
             else:
                 # Single criteria - detailed breakdown
-                return self._perform_statistical_analysis(df, params, {
-                    'analysis_type': 'statistical',
-                    'aggregation_type': 'detailed',
-                    'extracted_params': {'query': 'detailed'}
-                })
+                return self._perform_statistical_analysis(df, params, {})
             
         except Exception as e:
             return {
@@ -274,136 +286,101 @@ class AnalyticalProcessor:
             }
     
     def _perform_statistical_analysis(self, df: pd.DataFrame, params: Dict[str, Any], analysis: Dict[str, Any]) -> Dict[str, Any]:
-        """Perform comprehensive statistical analysis with individual state-year breakdown"""
+        """Perform statistical analysis on the filtered data."""
         try:
+            logger.debug("Starting statistical analysis")
             results = {
-                'analysis_type': 'statistical',
-                'results': {},
-                'summary': ''
+                'error': None,
+                'overall_totals': 0,
+                'crime_totals': {},
+                'state_totals': {},
+                'year_totals': {},
+                'insights': []
             }
             
-            # Get crime columns with mapping
-            crime_columns = [col for col in df.columns if col not in ['Year', 'STATE/UT', 'DISTRICT', 'Unnamed: 0']]
-            if params.get('crimes'):
-                mapped_crimes = self._map_crime_names(params['crimes'], crime_columns)
-                crime_columns = mapped_crimes
+            # Calculate overall totals
+            logger.debug("Calculating overall totals")
+            try:
+                total_cases = int(df['Cases'].sum())
+                results['overall_totals'] = total_cases
+                logger.debug(f"Overall total cases: {total_cases}")
+            except Exception as e:
+                logger.error(f"Error calculating overall totals: {str(e)}", exc_info=True)
+                results['error'] = f"Error calculating overall totals: {str(e)}"
+                return results
             
-            print(f"DEBUG: Crime columns to analyze: {crime_columns}")
-            print(f"DEBUG: Available states in data: {sorted(df['STATE/UT'].unique())}")
-            print(f"DEBUG: Available years in data: {sorted(df['Year'].unique())}")
+            # Calculate crime type totals
+            logger.debug("Calculating crime type totals")
+            try:
+                for crime in df['Crime Type'].unique():
+                    crime_df = df[df['Crime Type'] == crime]
+                    count = int(crime_df['Cases'].sum())
+                    percentage = (count / total_cases * 100) if total_cases > 0 else 0
+                    results['crime_totals'][crime] = {
+                        'count': count,
+                        'percentage': f"{percentage:.1f}%"
+                    }
+                logger.debug(f"Crime type totals: {results['crime_totals']}")
+            except Exception as e:
+                logger.error(f"Error calculating crime type totals: {str(e)}", exc_info=True)
+                results['error'] = f"Error calculating crime type totals: {str(e)}"
+                return results
             
-            summary_parts = []
+            # Calculate state totals
+            logger.debug("Calculating state totals")
+            try:
+                for state in df['STATE/UT'].unique():
+                    state_df = df[df['STATE/UT'] == state]
+                    count = int(state_df['Cases'].sum())
+                    percentage = (count / total_cases * 100) if total_cases > 0 else 0
+                    results['state_totals'][state] = {
+                        'count': count,
+                        'percentage': f"{percentage:.1f}%"
+                    }
+                logger.debug(f"State totals: {results['state_totals']}")
+            except Exception as e:
+                logger.error(f"Error calculating state totals: {str(e)}", exc_info=True)
+                results['error'] = f"Error calculating state totals: {str(e)}"
+                return results
             
-            # Fix period display to show actual years
-            actual_years = sorted(df['Year'].unique())
-            if len(actual_years) == 1:
-                period_display = f"Year {actual_years[0]}"
-            else:
-                period_display = f"Years {', '.join(map(str, actual_years))}"
+            # Calculate year totals
+            logger.debug("Calculating year totals")
+            try:
+                for year in df['Year'].unique():
+                    year_df = df[df['Year'] == year]
+                    count = int(year_df['Cases'].sum())
+                    percentage = (count / total_cases * 100) if total_cases > 0 else 0
+                    results['year_totals'][year] = {
+                        'count': count,
+                        'percentage': f"{percentage:.1f}%"
+                    }
+                logger.debug(f"Year totals: {results['year_totals']}")
+            except Exception as e:
+                logger.error(f"Error calculating year totals: {str(e)}", exc_info=True)
+                results['error'] = f"Error calculating year totals: {str(e)}"
+                return results
             
-            summary_parts.append(f"## 📊 **Crime Statistics Analysis**")
-            summary_parts.append(f"**Period:** {period_display} | **States:** {len(df['STATE/UT'].unique())} | **Crimes:** {len(crime_columns)}")
-            summary_parts.append("")
+            # Generate insights
+            logger.debug("Generating insights")
+            try:
+                results['insights'] = self._generate_insights(df, params, results)
+                logger.debug(f"Generated insights: {results['insights']}")
+            except Exception as e:
+                logger.error(f"Error generating insights: {str(e)}", exc_info=True)
+                results['error'] = f"Error generating insights: {str(e)}"
+                return results
             
-            # Individual Crime Analysis with State-Year breakdown
-            for crime in crime_columns:
-                if crime in df.columns:
-                    summary_parts.append(f"### 🚨 **{crime}**")
-                    
-                    # Create pivot table for state-year breakdown
-                    pivot_table = df.pivot_table(values=crime, index='STATE/UT', columns='Year', aggfunc='sum', fill_value=0)
-                    
-                    # Show individual state-year breakdown
-                    summary_parts.append(f"**State-wise breakdown by year:**")
-                    for state in sorted(pivot_table.index):
-                        state_data = []
-                        for year in sorted(df['Year'].unique()):
-                            value = pivot_table.loc[state, year] if year in pivot_table.columns else 0
-                            if value > 0:  # Only show non-zero values
-                                state_data.append(f"{year}: {value:,}")
-                        if state_data:  # Only show states with data
-                            summary_parts.append(f"• **{state}:** {', '.join(state_data)}")
-                    
-                    summary_parts.append("")
-                    
-                    # Year-wise totals (for trend analysis)
-                    year_totals = df.groupby('Year')[crime].sum().sort_index()
-                    summary_parts.append(f"**Year-wise totals:** {', '.join([f'{year} ({total:,})' for year, total in year_totals.items()])}")
-                    
-                    # Key statistics
-                    total_cases = df[crime].sum()
-                    avg_per_year = total_cases / len(df['Year'].unique())
-                    trend = self._calculate_trend(year_totals) if len(year_totals) > 1 else "Insufficient data"
-                    
-                    summary_parts.append(f"**Stats:** Total {total_cases:,} | Avg/year {avg_per_year:,.0f} | {trend}")
-                    
-                    # Growth rate if applicable
-                    if len(year_totals) > 1:
-                        first_year = year_totals.iloc[0]
-                        last_year = year_totals.iloc[-1]
-                        if first_year > 0:
-                            growth_rate = ((last_year - first_year) / first_year) * 100
-                            summary_parts.append(f"**Growth:** {growth_rate:+.1f}% ({year_totals.index[0]} to {year_totals.index[-1]})")
-                    
-                    summary_parts.append("")
-            
-            # Executive Summary - Compact format
-            summary_parts.append(f"## 📋 **Executive Summary**")
-            
-            # Overall totals
-            total_cases_overall = df[crime_columns].sum().sum()
-            total_states = len(df['STATE/UT'].unique())
-            total_years = len(df['Year'].unique())
-
-            # Store overall totals for visualization
-            results['results']['overall_totals'] = {
-                'total_cases': total_cases_overall,
-                'total_states': total_states,
-                'total_years': total_years
-            }
-            
-            summary_parts.append(f"**Overall:** {total_cases_overall:,} total cases | {total_states} states | {total_years} years | Avg {total_cases_overall / (total_states * total_years):,.0f}/state/year")
-            summary_parts.append("")
-            
-            # Crime-wise totals in compact format
-            crime_totals = df[crime_columns].sum().sort_values(ascending=False)
-            # Store crime-wise totals for visualization
-            results['results']['crime_totals'] = crime_totals.to_dict()
-            summary_parts.append(f"**Crime-wise:** {', '.join([f'{crime} ({total:,}, {total/total_cases_overall*100:.1f}%)' for crime, total in crime_totals.items()])}")
-            
-            # State-wise totals in compact format
-            state_totals = df.groupby('STATE/UT')[crime_columns].sum().sum(axis=1).sort_values(ascending=False)
-            # Store state-wise totals for visualization
-            results['results']['state_totals'] = state_totals.to_dict()
-            summary_parts.append(f"**State-wise:** {', '.join([f'{state} ({total:,}, {total/total_cases_overall*100:.1f}%)' for state, total in state_totals.items()])}")
-            
-            # Year-wise totals in compact format
-            year_totals_overall = df.groupby('Year')[crime_columns].sum().sum(axis=1).sort_index()
-            # Store year-wise totals for visualization
-            results['results']['year_totals'] = year_totals_overall.to_dict()
-            summary_parts.append(f"**Year-wise:** {', '.join([f'{year} ({total:,}, {total/total_cases_overall*100:.1f}%)' for year, total in year_totals_overall.items()])}")
-            summary_parts.append("")
-            
-            # Key insights in compact format
-            most_affected_state = state_totals.index[0]
-            least_affected_state = state_totals.index[-1]
-            most_common_crime = crime_totals.index[0]
-            overall_trend = self._calculate_trend(year_totals) if len(year_totals) > 1 else "Insufficient data"
-            
-            # Check if this is a "top" or "highest" query to avoid showing lowest state
-            query_lower = str(params.get('extracted_params', {}).get('query', '')).lower()
-            if any(word in query_lower for word in ['top', 'highest', 'most', 'best']):
-                summary_parts.append(f"**Key Insights:** Highest {most_affected_state} ({state_totals.iloc[0]:,}) | Most common {most_common_crime} ({crime_totals.iloc[0]:,}) | {overall_trend}")
-            else:
-                summary_parts.append(f"**Key Insights:** Highest {most_affected_state} ({state_totals.iloc[0]:,}) | Lowest {least_affected_state} ({state_totals.iloc[-1]:,}) | Most common {most_common_crime} ({crime_totals.iloc[0]:,}) | {overall_trend}")
-            
-            results['summary'] = "\n".join(summary_parts)
             return results
             
         except Exception as e:
+            logger.error(f"Error in statistical analysis: {str(e)}", exc_info=True)
             return {
-                'query_type': 'error',
-                'error_message': str(e)
+                'error': f"Error in statistical analysis: {str(e)}",
+                'overall_totals': 0,
+                'crime_totals': {},
+                'state_totals': {},
+                'year_totals': {},
+                'insights': [f"Error in statistical analysis: {str(e)}"]
             }
     
     def _perform_comparison_analysis(self, df: pd.DataFrame, params: Dict[str, Any], analysis: Dict[str, Any]) -> Dict[str, Any]:
@@ -754,9 +731,16 @@ class AnalyticalProcessor:
     def _perform_breakdown_analysis(self, df: pd.DataFrame, params: Dict[str, Any], analysis: Dict[str, Any]) -> Dict[str, Any]:
         """Perform comprehensive breakdown analysis with friendly, humanized insights"""
         try:
+            print(f"DEBUG: Starting breakdown analysis with params: {params}")
+            print(f"DEBUG: DataFrame columns: {df.columns.tolist()}")
+            
             results = {
                 'analysis_type': 'breakdown',
-                'results': {},
+                'results': {
+                    'yearly_breakdown': {},
+                    'state_breakdown': {},
+                    'crime_type_breakdown': {}
+                },
                 'summary': ''
             }
             
@@ -764,7 +748,8 @@ class AnalyticalProcessor:
             crime_columns = [col for col in df.columns if col not in ['Year', 'STATE/UT', 'DISTRICT', 'Unnamed: 0']]
             if params.get('crimes'):
                 mapped_crimes = self._map_crime_names(params['crimes'], crime_columns)
-                crime_columns = mapped_crimes
+                crime_columns = [c for c in mapped_crimes if c in df.columns]  # Ensure mapped crimes exist in df
+                print(f"DEBUG: Mapped crime columns: {crime_columns}")
             
             summary_parts = []
             summary_parts.append(f"## 🔍 **Detailed Breakdown of Crime Statistics**")
@@ -773,48 +758,85 @@ class AnalyticalProcessor:
             summary_parts.append("")
             
             # Year-wise breakdown with friendly language
+            print(f"DEBUG: Creating yearly breakdown for columns: {crime_columns}")
             yearly_breakdown = df.groupby('Year')[crime_columns].sum()
+            print(f"DEBUG: Yearly breakdown created with shape: {yearly_breakdown.shape}")
+            
             summary_parts.append(f"### 📅 **Year-by-Year Breakdown**")
             summary_parts.append(f"Here's how the numbers looked each year:")
+            
             for year in sorted(yearly_breakdown.index):
-                year_total = yearly_breakdown.loc[year].sum()
+                print(f"DEBUG: Processing year: {year}")
+                year_total = int(yearly_breakdown.loc[year].sum())  # Convert to Python int
                 summary_parts.append(f"**{year}:** {year_total:,} total cases")
                 
                 # Breakdown by crime type for this year
                 year_data = yearly_breakdown.loc[year]
-                # Store crime type breakdown for the specific year if requested
-                if params.get('years') and len(params['years']) == 1 and year == params['years'][0]:
-                    # Ensure only crime columns are included and sum them up for the given year
-                    crime_data_for_year = year_data[crime_columns].drop('Total', errors='ignore').dropna()
-                    # Filter out zero values for cleaner visualization
-                    crime_data_for_year = crime_data_for_year[crime_data_for_year > 0]
-                    results['results']['crime_type_breakdown'] = crime_data_for_year.to_dict()
-                    print(f"DEBUG: Stored crime_type_breakdown for year {year}: {crime_data_for_year.to_dict()}")
-
+                print(f"DEBUG: Year data for {year}: {year_data.to_dict()}")
+                
+                # Store yearly breakdown
+                year_breakdown = {}
                 for crime in crime_columns:
                     if crime in year_data and year_data[crime] > 0:
-                        summary_parts.append(f"• {crime}: {year_data[crime]:,} cases")
+                        year_breakdown[crime] = int(year_data[crime])  # Convert to Python int
+                        summary_parts.append(f"• {crime}: {int(year_data[crime]):,} cases")
+                
+                results['results']['yearly_breakdown'][str(year)] = {
+                    'total': year_total,
+                    'breakdown': year_breakdown
+                }
                 summary_parts.append("")
             
             # State-wise breakdown with friendly language
+            print(f"DEBUG: Creating state breakdown for columns: {crime_columns}")
             state_breakdown = df.groupby('STATE/UT')[crime_columns].sum()
+            print(f"DEBUG: State breakdown created with shape: {state_breakdown.shape}")
+            
             summary_parts.append(f"### 🏛️ **State-by-State Breakdown**")
             summary_parts.append(f"Here's how each state performed:")
+            
             for state in sorted(state_breakdown.index):
-                state_total = state_breakdown.loc[state].sum()
+                print(f"DEBUG: Processing state: {state}")
+                state_total = int(state_breakdown.loc[state].sum())  # Convert to Python int
                 summary_parts.append(f"**{state}:** {state_total:,} total cases")
                 
                 # Breakdown by crime type for this state
                 state_data = state_breakdown.loc[state]
+                print(f"DEBUG: State data for {state}: {state_data.to_dict()}")
+                
+                # Store state breakdown
+                state_breakdown_dict = {}
                 for crime in crime_columns:
                     if crime in state_data and state_data[crime] > 0:
-                        summary_parts.append(f"• {crime}: {state_data[crime]:,} cases")
+                        state_breakdown_dict[crime] = int(state_data[crime])  # Convert to Python int
+                        summary_parts.append(f"• {crime}: {int(state_data[crime]):,} cases")
+                
+                results['results']['state_breakdown'][state] = {
+                    'total': state_total,
+                    'breakdown': state_breakdown_dict
+                }
                 summary_parts.append("")
             
+            # Store crime type breakdown for the first year if requested
+            if params.get('years') and len(params['years']) > 0:
+                first_year = params['years'][0]
+                if first_year in yearly_breakdown.index:
+                    crime_data_for_year = yearly_breakdown.loc[first_year]
+                    crime_data_for_year = crime_data_for_year[crime_data_for_year > 0]
+                    results['results']['crime_type_breakdown'] = {
+                        k: int(v) for k, v in crime_data_for_year.to_dict().items()  # Convert to Python int
+                    }
+                    print(f"DEBUG: Stored crime_type_breakdown for year {first_year}: {results['results']['crime_type_breakdown']}")
+            
             results['summary'] = "\n".join(summary_parts)
+            print(f"DEBUG: Final results structure: {results.keys()}")
             return results
             
         except Exception as e:
+            print(f"DEBUG: Error in _perform_breakdown_analysis: {str(e)}")
+            print(f"DEBUG: Error type: {type(e)}")
+            import traceback
+            print(f"DEBUG: Error traceback: {traceback.format_exc()}")
             return {
                 'query_type': 'error',
                 'error_message': str(e)
@@ -856,13 +878,25 @@ class AnalyticalProcessor:
         # Extract years with multiple patterns
         year_patterns = [
             r'\b(20\d{2})\b',
-            r'\b(2001|2002|2003|2004|2005|2006|2007|2008|2009|2010|2011|2012|2013|2014)\b'
+            r'\b(2001|2002|2003|2004|2005|2006|2007|2008|2009|2010|2011|2012|2013|2014)\b',
+            r'\b(last|previous|past)\s+(\d+)\s+(?:years?|yrs?)\b',
+            r'\b(recent|current)\s+(?:year|yr)\b'
         ]
         
         for pattern in year_patterns:
-            years = re.findall(pattern, query)
-            if years:
-                params['years'] = [int(year) for year in years]
+            matches = re.findall(pattern, query_lower)
+            if matches:
+                if isinstance(matches[0], tuple):
+                    # Handle patterns with groups
+                    if 'last' in matches[0][0] or 'previous' in matches[0][0] or 'past' in matches[0][0]:
+                        num_years = int(matches[0][1])
+                        current_year = datetime.now().year
+                        params['years'] = list(range(current_year - num_years, current_year))
+                    elif 'recent' in matches[0][0] or 'current' in matches[0][0]:
+                        params['years'] = [datetime.now().year]
+                else:
+                    # Handle simple year patterns
+                    params['years'] = [int(year) for year in matches]
                 break
         
         # Extract states with improved pattern matching
@@ -896,13 +930,19 @@ class AnalyticalProcessor:
         
         # Extract crimes with comprehensive patterns
         crime_patterns = [
-            r'\b(rape|dowry deaths?|dowry death|dowry|kidnapping|kidnapping and abduction|abduction|assault|assault on women|insult|insult to modesty|cruelty|cruelty by husband|cruelty by husband or his relatives|importation|importation of girls)\b'
+            r'\b(rape|dowry deaths?|dowry death|dowry|kidnapping|kidnapping and abduction|abduction|assault|assault on women|insult|insult to modesty|cruelty|cruelty by husband|cruelty by husband or his relatives|importation|importation of girls)\b',
+            r'\b(all|every|each|any)\s+(?:type of\s+)?(?:crime|crimes)\b'
         ]
         
         for pattern in crime_patterns:
-            crimes = re.findall(pattern, query_lower)
-            if crimes:
-                params['crimes'].extend(crimes)
+            matches = re.findall(pattern, query_lower)
+            if matches:
+                if 'all' in matches[0] or 'every' in matches[0] or 'each' in matches[0] or 'any' in matches[0]:
+                    # Get all crime columns from the dataframe
+                    crime_columns = [col for col in self.df.columns if col not in ['Year', 'STATE/UT', 'DISTRICT', 'Unnamed: 0']]
+                    params['crimes'] = crime_columns
+                else:
+                    params['crimes'].extend(matches)
         
         # Determine comparison type
         if any(word in query_lower for word in ['lowest', 'least', 'minimum', 'worst']):
@@ -915,6 +955,14 @@ class AnalyticalProcessor:
         if ranking_match:
             params['ranking_limit'] = int(ranking_match.group(2))
         
+        # Extract aggregation type
+        if any(word in query_lower for word in ['average', 'mean', 'avg']):
+            params['aggregation_type'] = 'average'
+        elif any(word in query_lower for word in ['total', 'sum', 'overall']):
+            params['aggregation_type'] = 'total'
+        elif any(word in query_lower for word in ['median', 'middle']):
+            params['aggregation_type'] = 'median'
+        
         return params
     
     def _determine_analysis_type(self, query: str, params: Dict[str, Any]) -> str:
@@ -925,16 +973,16 @@ class AnalyticalProcessor:
         if any(word in query_lower for word in ['which year', 'what year', 'year with', 'year had', 'year showing', 'year recorded']):
             return 'ranking'  # Year-based ranking
         
-        # Check for specific keywords
-        if any(word in query_lower for word in ['compare', 'vs', 'versus', 'difference', 'between']):
+        # Check for specific keywords with improved pattern matching
+        if any(word in query_lower for word in ['compare', 'vs', 'versus', 'difference', 'between', 'versus']):
             return 'comparison'
-        elif any(word in query_lower for word in ['top', 'first', 'best', 'worst', 'ranking', 'highest', 'lowest']):
+        elif any(word in query_lower for word in ['top', 'first', 'best', 'worst', 'ranking', 'highest', 'lowest', 'most', 'least']):
             return 'ranking'
-        elif any(word in query_lower for word in ['trend', 'over time', 'yearly', 'annual', 'growth', 'decline', 'pattern', 'change']):
+        elif any(word in query_lower for word in ['trend', 'over time', 'yearly', 'annual', 'growth', 'decline', 'pattern', 'change', 'increase', 'decrease']):
             return 'trend'
-        elif any(word in query_lower for word in ['statistics', 'total', 'sum', 'average', 'breakdown']):
+        elif any(word in query_lower for word in ['statistics', 'total', 'sum', 'average', 'breakdown', 'overall']):
             return 'statistical'
-        elif any(word in query_lower for word in ['breakdown', 'year-wise', 'state-wise', 'detailed']):
+        elif any(word in query_lower for word in ['breakdown', 'year-wise', 'state-wise', 'detailed', 'distribution', 'by']):
             return 'breakdown'
         
         # Check parameter-based logic
@@ -944,8 +992,13 @@ class AnalyticalProcessor:
             return 'trend'
         elif len(params.get('crimes', [])) > 1:
             return 'statistical'
-        else:
-            return 'statistical'  # Default to comprehensive statistical analysis
+        elif params.get('comparison_type') == 'difference':
+            return 'comparison'
+        elif params.get('ranking_limit') is not None:
+            return 'ranking'
+        
+        # Default to comprehensive statistical analysis
+        return 'statistical'
     
     def _calculate_trend(self, series: pd.Series) -> str:
         """Calculate trend direction with friendly, humanized descriptions"""
@@ -979,17 +1032,55 @@ class AnalyticalProcessor:
             }
         }
     
-    def _generate_insights(self, df: pd.DataFrame, params: Dict[str, Any], results: Dict[str, Any]) -> List[str]:
-        """Generate actionable insights with friendly language from the analysis"""
+    def _generate_insights(self, df: pd.DataFrame, params: Dict[str, Any], result: Dict[str, Any]) -> List[str]:
+        """Generate meaningful insights from the analysis results."""
         insights = []
         
-        # Add insights based on the analysis type and data
-        if results.get('analysis_type') == 'statistical':
-            total_cases = df[[col for col in df.columns if col not in ['Year', 'STATE/UT', 'DISTRICT', 'Unnamed: 0']]].sum().sum()
-            if total_cases > 0:
-                insights.append(f"The data shows {total_cases:,} total cases across the criteria you specified")
-        
-        return insights
+        try:
+            if df.empty:
+                return ["No data available for analysis"]
+            
+            # Basic data coverage insights
+            insights.append(f"Data spans {df['Year'].nunique()} years and {df['STATE/UT'].nunique()} states.")
+            
+            # Crime type insights
+            if 'crime_totals' in result.get('results', {}):
+                crime_totals = result['results']['crime_totals']
+                if crime_totals:
+                    top_crime = max(crime_totals.items(), key=lambda x: x[1])[0]
+                    insights.append(f"Most reported crime: {top_crime}")
+                    
+                    # Add trend insights if available
+                    if 'year_totals' in result.get('results', {}):
+                        years = sorted(result['results']['year_totals'].keys())
+                        if len(years) > 1:
+                            first_year = years[0]
+                            last_year = years[-1]
+                            first_total = result['results']['year_totals'][first_year]
+                            last_total = result['results']['year_totals'][last_year]
+                            change = ((last_total - first_total) / first_total) * 100
+                            trend = "increased" if change > 0 else "decreased"
+                            insights.append(f"From {first_year} to {last_year}, total cases {trend} by {abs(change):.1f}%")
+            
+            # State comparison insights
+            if 'state_totals' in result.get('results', {}):
+                state_totals = result['results']['state_totals']
+                if state_totals:
+                    max_state = max(state_totals.items(), key=lambda x: x[1])[0]
+                    min_state = min(state_totals.items(), key=lambda x: x[1])[0]
+                    insights.append(f"{max_state} had the highest number of cases, while {min_state} had the lowest")
+            
+            # Parameter-specific insights
+            if params.get('years'):
+                insights.append(f"Analysis focused on years: {', '.join(map(str, params['years']))}")
+            if params.get('states'):
+                insights.append(f"Analysis focused on states: {', '.join(params['states'])}")
+            
+            return insights
+            
+        except Exception as e:
+            logger.error(f"Error generating insights: {str(e)}", exc_info=True)
+            return ["Unable to generate detailed insights due to data processing error"]
     
     def _generate_suggestions(self, params: Dict[str, Any]) -> List[str]:
         """Generate helpful suggestions with friendly language when no data is found"""
@@ -1027,4 +1118,23 @@ class AnalyticalProcessor:
         if results.get('insights'):
             answer += f"\n\n💡 **Here's what I found interesting:**\n" + "\n".join([f"• {insight}" for insight in results['insights']])
         
-        return answer 
+        return answer
+
+    def _get_data_quality(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """Get data quality metrics."""
+        try:
+            logger.debug("Starting data quality calculation")
+            total_records = len(df)
+            total_states = len(df['STATE/UT'].unique())
+            total_years = len(df['Year'].unique())
+            total_crimes = len([col for col in df.columns if col not in ['Year', 'STATE/UT', 'DISTRICT', 'Unnamed: 0']])
+            
+            return {
+                'total_records': total_records,
+                'states_covered': total_states,
+                'years_covered': total_years,
+                'crime_types_covered': total_crimes
+            }
+        except Exception as e:
+            logger.error(f"Error calculating data quality: {str(e)}", exc_info=True)
+            return {'error': str(e)} 

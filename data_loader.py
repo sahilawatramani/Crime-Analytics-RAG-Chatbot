@@ -11,9 +11,97 @@ from config import DATA_CONFIG, MODEL_CONFIGS
 from sentence_transformers import SentenceTransformer
 import torch
 from utils import log_error
-from model_loader import ModelManager, EmbeddingModel  # Add EmbeddingModel import
+from model_loader import ModelManager, EmbeddingModel, validate_and_truncate_texts  # Add EmbeddingModel and validate_and_truncate_texts import
+from transformers import AutoTokenizer
 
 logger = logging.getLogger(__name__)
+
+class DataLoader:
+    """Class to handle data loading and preprocessing for the crime analytics application."""
+    
+    def __init__(self, data_file: str = None):
+        """Initialize the DataLoader with optional data file path."""
+        self.data_file = data_file or DATA_CONFIG['data_file']
+        self.df = None
+        self._load_data()
+    
+    def _load_data(self) -> None:
+        """Load and preprocess the crime data."""
+        try:
+            # Load data from CSV
+            self.df = pd.read_csv(self.data_file)
+            
+            # Basic preprocessing
+            self.df = self.df.fillna(0)  # Fill missing values with 0
+            
+            # Convert numeric columns to appropriate types
+            numeric_cols = self.df.select_dtypes(include=[np.number]).columns
+            self.df[numeric_cols] = self.df[numeric_cols].astype(np.int32)
+            
+            # Ensure Year column is integer
+            self.df['Year'] = self.df['Year'].astype(int)
+            
+            # Clean state names: strip, upper, and apply specific mappings for consistency
+            self.df['STATE/UT'] = self.df['STATE/UT'].str.strip().str.upper()
+            
+            # Specific state name mappings for consistency and readability
+            state_name_mapping = {
+                'A & N ISLANDS': 'ANDAMAN AND NICOBAR ISLANDS',
+                'A&N ISLANDS': 'ANDAMAN AND NICOBAR ISLANDS',
+                'DELHI UT': 'DELHI',
+                'D & N HAVELI': 'DADRA AND NAGAR HAVELI',
+                'D&N HAVELI': 'DADRA AND NAGAR HAVELI',
+                'DAMAN & DIU': 'DAMAN AND DIU',
+                'JAMMU & KASHMIR': 'JAMMU AND KASHMIR',
+                'PUDUCHERRY': 'PUDUCHERRY'  # Ensure consistent casing
+            }
+            
+            # Apply mapping
+            self.df['STATE/UT'] = self.df['STATE/UT'].replace(state_name_mapping, regex=True)
+            
+            # Ensure all states are in a consistent format (e.g., proper spacing)
+            self.df['STATE/UT'] = self.df['STATE/UT'].apply(lambda x: ' '.join(x.split()))
+            
+            # Clean district names
+            self.df['DISTRICT'] = self.df['DISTRICT'].str.strip().str.title()
+            
+            logger.info(f"Loaded data with shape: {self.df.shape}")
+            
+        except Exception as e:
+            logger.error(f"Error loading data: {str(e)}", exc_info=True)
+            raise
+    
+    def get_data_summary(self) -> Dict[str, Any]:
+        """Get a summary of the loaded data."""
+        try:
+            if self.df is None:
+                raise ValueError("No data loaded")
+            
+            return {
+                'total_records': len(self.df),
+                'years_range': [int(self.df['Year'].min()), int(self.df['Year'].max())],
+                'states_count': len(self.df['STATE/UT'].unique()),
+                'crime_types': [col for col in self.df.columns if col not in ['Year', 'STATE/UT', 'DISTRICT', 'Unnamed: 0']],
+                'data_shape': list(self.df.shape)
+            }
+        except Exception as e:
+            logger.error(f"Error getting data summary: {str(e)}", exc_info=True)
+            raise
+    
+    def get_filter_options(self) -> Dict[str, List]:
+        """Get available filter options for the dataset."""
+        try:
+            if self.df is None:
+                raise ValueError("No data loaded")
+            
+            return {
+                'years': sorted(self.df['Year'].unique().tolist()),
+                'states': sorted(self.df['STATE/UT'].unique().tolist()),
+                'crime_types': sorted([col for col in self.df.columns if col not in ['Year', 'STATE/UT', 'DISTRICT', 'Unnamed: 0']])
+            }
+        except Exception as e:
+            logger.error(f"Error getting filter options: {str(e)}", exc_info=True)
+            raise
 
 def load_data() -> pd.DataFrame:
     """Load and preprocess the crime data"""
@@ -74,34 +162,55 @@ def prepare_documents(df: pd.DataFrame) -> Tuple[List[str], List[Dict[str, Any]]
         
         logger.info(f"Preparing documents from {total_rows} rows in chunks of {chunk_size}")
         
+        # Get all crime types for better context
+        crime_types = [col for col in df.columns if col not in ['Year', 'STATE/UT', 'DISTRICT']]
+        
         for start_idx in range(0, total_rows, chunk_size):
             end_idx = min(start_idx + chunk_size, total_rows)
             chunk_df = df.iloc[start_idx:end_idx]
             
             logger.info(f"Processing chunk {start_idx//chunk_size + 1}/{(total_rows + chunk_size - 1)//chunk_size} (rows {start_idx}-{end_idx})")
             
-            for _, row in chunk_df.iterrows():
+            for idx, row in chunk_df.iterrows():
                 try:
-                    # Create a single comprehensive document per row instead of multiple variations
+                    # Create a unique document ID
+                    doc_id = f"doc_{idx}"
+                    
+                    # Extract basic information
                     year = row['Year']
                     state = row['STATE/UT']
                     district = row['DISTRICT']
                     
-                    # Create one comprehensive document with all crime data
-                    crime_data = []
-                    for col in df.columns:
-                        if col not in ['Year', 'STATE/UT', 'DISTRICT'] and pd.notna(row[col]) and row[col] > 0:
-                            crime_data.append(f"{col}: {int(row[col])}")
+                    # Calculate total crimes and create crime statistics
+                    crime_stats = []
+                    total_crimes = 0
+                    for crime_type in crime_types:
+                        if pd.notna(row[crime_type]) and row[crime_type] > 0:
+                            crime_stats.append(f"{crime_type}: {int(row[crime_type])}")
+                            total_crimes += int(row[crime_type])
                     
-                    if crime_data:  # Only create document if there's crime data
-                        doc = f"In {year}, {state} state {district} district reported: {', '.join(crime_data)}"
+                    if crime_stats:  # Only create document if there's crime data
+                        # Create a more structured and informative document
+                        doc = f"""Crime Report for {district}, {state} ({year})
+Location: {district} district in {state} state
+Year: {year}
+Total Crimes: {total_crimes}
+Crime Statistics:
+{chr(10).join(f"- {stat}" for stat in crime_stats)}
+
+This report provides detailed crime statistics for {district} district in {state} state during {year}. The data shows {total_crimes} total reported crimes, including {', '.join(crime_stats)}."""
                         
-                        # Add metadata
+                        # Enhanced metadata with more information
                         meta = {
+                            'doc_id': doc_id,
                             'year': int(year),
                             'state': state,
                             'district': district,
-                            'total_crimes': sum(row[col] for col in df.columns if col not in ['Year', 'STATE/UT', 'DISTRICT'] and pd.notna(row[col]))
+                            'total_crimes': total_crimes,
+                            'crime_types': [crime_type for crime_type in crime_types if pd.notna(row[crime_type]) and row[crime_type] > 0],
+                            'crime_counts': {crime_type: int(row[crime_type]) for crime_type in crime_types if pd.notna(row[crime_type]) and row[crime_type] > 0},
+                            'location': f"{district}, {state}",
+                            'time_period': str(year)
                         }
                         
                         documents.append(doc)
@@ -118,21 +227,21 @@ def prepare_documents(df: pd.DataFrame) -> Tuple[List[str], List[Dict[str, Any]]
         log_error(e, {'function': 'prepare_documents'})
         raise
 
-def get_embeddings(model: EmbeddingModel, documents: List[str]) -> torch.Tensor:
-    """Generate embeddings for documents using ultra-simple TF-IDF approach to avoid all PyTorch issues"""
-    try:
-        # Use the ultra-simple TF-IDF approach instead of PyTorch models
-        from ultra_simple_embedding import create_ultra_simple_embeddings
-        
-        logger.info(f"Using ultra-simple TF-IDF approach for {len(documents)} documents")
-        embeddings = create_ultra_simple_embeddings(documents, batch_size=64)
-        
-        # Convert numpy array to torch tensor
-        embeddings_tensor = torch.from_numpy(embeddings).float()
-        
-        logger.info(f"Ultra-simple TF-IDF embedding generation completed, shape: {embeddings_tensor.shape}")
-        return embeddings_tensor
+def get_embeddings(texts: List[str], model: EmbeddingModel) -> np.ndarray:
+    """Get embeddings for a list of texts using the provided model
     
+    Args:
+        texts: List of texts to embed
+        model: EmbeddingModel instance to use
+        
+    Returns:
+        numpy array of embeddings
+    """
+    try:
+        if not texts:
+            return np.empty((0, 384))  # Return empty array with correct dimensions
+        
+        return model.encode(texts)
     except Exception as e:
         log_error(e, {'function': 'get_embeddings'})
         raise
@@ -306,7 +415,7 @@ def load_cached_data(force_regenerate: bool = False) -> Tuple[pd.DataFrame, List
         # Generate and save embeddings using ModelManager
         model_manager = ModelManager()
         model = model_manager.load_embedding_model()
-        embeddings = get_embeddings(model, documents)
+        embeddings = get_embeddings(documents, model)
         torch.save(embeddings, embeddings_cache)
         
         return df, documents, metadata, embeddings
